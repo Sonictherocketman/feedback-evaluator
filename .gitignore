@@ -1,2 +1,9 @@
 *.pdf
 *bbprojectd
+papers/text/
+.coverage
+htmlcov/
+
+*/__pycache__/*
+*.pyc
+feedback_evaluator/feedback_evaluator.egg-info/*

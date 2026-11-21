@@ -14,21 +14,24 @@
 ROOT       := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 PKG        := feedback_evaluator
 PY         ?= python3
+EXTRACT_ARGS ?= --papers-dir $(ROOT)/papers
 EVAL_ARGS  ?= --papers-dir $(ROOT)/papers --system $(ROOT)/prompts/system.md --catalog $(ROOT)/prompts/catalog.yaml --feedback-dir $(ROOT)/feedback --model partner --resume
-EMBED_ARGS ?=
-COMPARE_ARGS ?=
+EMBED_ARGS ?= --feedback-dir $(ROOT)/feedback --out-dir $(ROOT)/embeddings
+COMPARE_ARGS ?= --embeddings-file $(ROOT)/embeddings/embeddings.jsonl --out-dir $(ROOT)/results
 
-.PHONY: help install format format-check test eval embed compare run scan checks clean
+.PHONY: help install format format-check test coverage extract eval embed compare run scan checks clean
 
 help:
 	@echo "make install         install the package + dev tools (editable)"
 	@echo "make format          black-format the package and tests"
 	@echo "make format-check    black --check (no writes); fails if unformatted"
-	@echo "make test            run the pytest suite"
+	@echo "make test            run the pytest suite (with coverage)"
+	@echo "make coverage        tests + coverage table, and htmlcov/ report"
+	@echo "make extract         stage 0: papers/*.pdf -> papers/text/*.txt"
 	@echo "make eval            stage 1: paper critiques -> feedback/"
 	@echo "make embed           stage 2: feedback lines -> embeddings/"
 	@echo "make compare         stage 3: embedding overlap -> results/"
-	@echo "make run             eval -> embed -> compare (full pipeline)"
+	@echo "make run             extract -> eval -> embed -> compare (all)"
 	@echo "make scan            semgrep security/bug scan"
 	@echo "make checks          all checks: format-check + test + scan"
 	@echo "make clean           remove build/bytecode artifacts"
@@ -45,6 +48,14 @@ format-check:
 test:
 	cd $(ROOT)/$(PKG) && $(PY) -m pytest -q
 
+coverage:
+	cd $(ROOT)/$(PKG) && $(PY) -m pytest -q \
+		--cov-report=term-missing --cov-report=html:htmlcov
+	@echo "html report: $(ROOT)/$(PKG)/htmlcov/index.html"
+
+extract:
+	cd $(ROOT)/$(PKG) && $(PY) -m feedback_evaluator extract $(EXTRACT_ARGS)
+
 eval:
 	cd $(ROOT)/$(PKG) && $(PY) -m feedback_evaluator eval $(EVAL_ARGS)
 
@@ -54,7 +65,7 @@ embed:
 compare:
 	cd $(ROOT)/$(PKG) && $(PY) -m feedback_evaluator compare $(COMPARE_ARGS)
 
-run: eval embed compare
+run: extract eval embed compare
 	@echo "==> done"
 
 scan:
@@ -67,5 +78,7 @@ checks: format-check test scan
 
 clean:
 	cd $(ROOT) \
-		&& rm -rf $(PKG)/build $(PKG)/dist $(PKG)/$(PKG).egg-info .pytest_cache $(PKG)/.pytest_cache
+		&& rm -rf $(PKG)/build $(PKG)/dist $(PKG)/$(PKG).egg-info \
+			.pytest_cache $(PKG)/.pytest_cache .coverage $(PKG)/.coverage \
+			$(PKG)/htmlcov
 	find $(ROOT) -type d -name '__pycache__' -not -path '$(ROOT)/.git/*' -exec rm -rf {} +

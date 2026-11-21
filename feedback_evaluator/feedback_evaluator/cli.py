@@ -11,7 +11,7 @@ import argparse
 import os
 from pathlib import Path
 
-from . import compare, embedding, evaluator
+from . import compare, embedding, evaluator, extract
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -21,6 +21,15 @@ def build_parser() -> argparse.ArgumentParser:
         "feedback lines, and compare the embeddings.",
     )
     sub = p.add_subparsers(dest="command", required=True)
+
+    # Extract
+
+    x = sub.add_parser(
+        "extract", help="convert papers/*.pdf to papers/text/*.txt"
+    )
+    x.add_argument("--papers-dir", type=Path, default=Path("papers"))
+
+    # Eval
 
     e = sub.add_parser("eval", help="run agent evaluations on papers/")
     e.add_argument("--papers-dir", type=Path, default=Path("papers"))
@@ -49,6 +58,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="skip pairs already in feedback/evaluations.jsonl",
     )
 
+    # Embed
+
     b = sub.add_parser(
         "embed", help="embed feedback lines via an embedding server"
     )
@@ -72,6 +83,8 @@ def build_parser() -> argparse.ArgumentParser:
         "empty = server default)",
     )
     b.add_argument("--batch-size", type=int, default=128)
+
+    # Compare
 
     c = sub.add_parser(
         "compare", help="compare embeddings; write overlap report"
@@ -104,6 +117,9 @@ def _env(key: str, default: str = "") -> str:
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
+
+    if args.command == "extract":
+        return extract.run(papers_dir=args.papers_dir)
 
     if args.command == "eval":
         return evaluator.run(

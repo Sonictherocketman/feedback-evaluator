@@ -14,11 +14,12 @@ dependencies = [
     "numpy",
     "PyYAML",
     "pypdf",
+    "fonttools",  # pypdf: decode CFF/Type1 fonts (standard in TeX PDFs)
 ]
 
 [project.optional-dependencies]
-test = ["pytest"]
-dev = ["pytest", "black", "semgrep"]
+test = ["pytest", "pytest-cov"]
+dev = ["pytest", "pytest-cov", "black", "semgrep"]
 
 [project.scripts]
 feedback_evaluator = "feedback_evaluator.cli:main"
@@ -29,6 +30,7 @@ packages = ["feedback_evaluator"]
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+addopts = "--cov=feedback_evaluator --cov-report=term-missing"
 
 [tool.black]
 line-length = 79

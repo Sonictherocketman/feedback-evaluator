@@ -259,17 +259,22 @@ def _forward_stderr(line: str) -> None:
 
 
 def evaluate_one(
-    prompt_text: str, paper_name: str, options: ClaudeAgentOptions
+    prompt_text: str, read_ref: str, options: ClaudeAgentOptions
 ) -> tuple[str, list[str]]:
     """Run one agent session for one (paper, prompt) pair.
+
+    ``read_ref`` is the paper file (text extraction preferred, else the
+    PDF) as a path relative to the agent's working directory.
 
     Returns (feedback_text, warnings); raises if the agent produced
     nothing at all.
     """
     task = (
-        f"Read the academic paper at the relative path "
-        f"`papers/{paper_name}` (your working directory is the project "
-        "root) and provide your evaluation of it.\n\n"
+        f"Read the academic paper at the relative path `{read_ref}` "
+        "(your working directory is the project root) and provide your "
+        "evaluation of it. It is plain text extracted from the PDF, so "
+        "figures are absent and some math may be approximate; evaluate "
+        "what is there.\n\n"
         f"Question to answer:\n{prompt_text}\n\n"
         "You are running non-interactively as part of a batch: never ask "
         "for confirmation, never offer to re-run anything, and answer "
@@ -409,9 +414,16 @@ def run(
     for paper in papers:
         paper_id = paper.stem
         doi = extract_doi(paper)
+        # pass the model the text extraction if it exists, else the PDF
+        read_ref = (
+            f"papers/text/{paper_id}.txt"
+            if (papers_dir / "text" / f"{paper_id}.txt").is_file()
+            else f"papers/{paper.name}"
+        )
         out(
             f"== {paper.name} -> {paper_id}.md"
             + (f"  doi={doi}" if doi else "")
+            + ("" if read_ref.endswith(".pdf") else "  (text)")
         )
         for prompt in prompts:
             feedback_id = f"{paper_id}-{prompt.id}"
@@ -420,9 +432,7 @@ def run(
                 continue
             started = time.monotonic()
             try:
-                text, warnings = evaluate_one(
-                    prompt.prompt, paper.name, options
-                )
+                text, warnings = evaluate_one(prompt.prompt, read_ref, options)
             except Exception as exc:
                 failed_pairs.add((paper_id, prompt.id))
                 out(f"   [FAIL] {feedback_id}: {exc}")

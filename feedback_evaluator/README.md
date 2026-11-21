@@ -5,6 +5,7 @@ Code agent, embeds the resulting feedback lines, and compares the
 embeddings for overlap.
 
 ```
+extract   convert papers/*.pdf -> papers/text/*.txt (resumable)
 eval      run one Claude Code agent session per (paper, prompt)
 embed     embed each prose line of the feedback via an embedding server
 compare   pairwise cosine over the embeddings -> overlap report
@@ -23,6 +24,7 @@ CWD-relative: `papers/`, `prompts/`, `feedback/`, `embeddings/`,
 ## Usage
 
 ```bash
+feedback_evaluator extract         # papers/*.pdf -> papers/text/*.txt
 feedback_evaluator eval            # 16 papers x catalog prompts -> feedback/
 feedback_evaluator eval --resume --model opus
 feedback_evaluator embed --embed-url http://localhost:11434/v1 --model nomic-embed-text
@@ -31,6 +33,15 @@ feedback_evaluator compare --threshold 0.9 --top 20
 
 (`python -m feedback_evaluator` works too.)
 
+- **extract** — converts each `papers/*.pdf` to
+  `papers/text/<paper>.txt` (pypdf text layer; figures are dropped,
+  equations come through as Unicode where the PDF's fonts allow).
+  Existing non-empty files are skipped, so it's cheap to re-run as the
+  corpus changes. A page that trips pypdf (e.g. a dense figure page
+  hitting its token limit) is dropped with a `[warn]` count instead of
+  failing the paper; only an all-failed PDF fails. Run this before
+  `eval`: the model is then given the text file, not the raw PDF
+  (`eval` falls back to the PDF per paper when no text file exists).
 - **eval** — the agent session runs with the same process the Claude CLI
   uses (Claude Agent SDK): read-only (`dontAsk`), cwd = the directory you
   ran from, system prompt `prompts/system.md`, question prompts from
@@ -80,10 +91,11 @@ make install         pip install -e "feedback_evaluator[dev]"
 make format          black-format the package and tests
 make format-check    black --check — fails if anything is unformatted
 make test            run the pytest suite
+make extract         stage 0: papers/*.pdf -> papers/text/*.txt
 make eval            stage 1: paper critiques  -> feedback/
 make embed           stage 2: feedback lines   -> embeddings/
 make compare         stage 3: embedding overlap -> results/
-make run             eval -> embed -> compare, the full pipeline
+make run             extract -> eval -> embed -> compare (full pipeline)
 make scan            semgrep --error --config auto over the package
 make checks          all checks in CI order: format-check + test + scan
 make clean           remove build/bytecode artifacts
@@ -114,7 +126,10 @@ Note: `Makefile` recipes run `black` from inside this directory so
 
 From the repo root: `make test` (or `cd feedback_evaluator &&
 python -m pytest -q`). The suite is fully offline — the agent SDK is
-never invoked and the embedding server is a stdlib local stub.
+never invoked and the embedding server is a stdlib local stub. Coverage
+runs with every pytest invocation (pytest-cov, config in
+`pyproject.toml`); `make coverage` additionally writes an HTML report
+to `feedback_evaluator/htmlcov/`.
 
 ## Security scan
 

@@ -1,2 +1,0 @@
-[console_scripts]
-feedback_evaluator = feedback_evaluator.cli:main

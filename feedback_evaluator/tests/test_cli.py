@@ -32,6 +32,21 @@ def test_cli_parses_all_subcommands():
         p.parse_args([])  # subcommand required
 
 
+def test_cli_extract_delegates(monkeypatch, tmp_path):
+    from feedback_evaluator import extract
+
+    calls = {}
+
+    def fake_run(**kwargs):
+        calls.update(kwargs)
+        return 0
+
+    monkeypatch.setattr(extract, "run", fake_run)
+    rc = cli.main(["extract", "--papers-dir", str(tmp_path)])
+    assert rc == 0
+    assert calls["papers_dir"] == tmp_path
+
+
 def test_cli_eval_delegates(monkeypatch, tmp_path):
     """eval dispatches to evaluator.run with the right values."""
     from feedback_evaluator import evaluator
