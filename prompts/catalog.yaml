@@ -1,0 +1,96 @@
+# Prompt catalogue.
+#
+# One entry per prompt. `id` is the stable key used everywhere downstream
+# (prompt_id in results, part of feedback_id). `title` is a short human
+# label; `prompt` is the instruction the evaluator agent receives.
+#
+# Add as many entries as you like; each one will be run against each
+# paper unless you filter with --prompt <id>.
+#
+# A plain list of strings is also accepted and auto-ID'd P01, P02, ...:
+#   - Write the paper's contribution in your own words.
+#   - Audit the quantitative claims.
+
+- id: general-review
+  title: General Review
+  prompt: >-
+    Generally review the argument of the paper and provide helpful critique.
+
+- id: expert-collegue-review
+  title: Expert Collegue Review
+  prompt: >-
+    You are an expert scientist in the given domain of this research. A peer has come to you seeking your review of their work. Provide your honest feedback.
+
+- id: grammar-review
+  title: Grammar Review
+  prompt: >-
+    You are an expert editor at a journal, not an expert in a given discipline. Evaluate the given paper's grammatical style, prose, and overall argument with little claim to its scientific merit.
+
+- id: critique
+  title: Critique
+  prompt: >-
+    Critique this.
+
+- id: novelty
+  title: Novelty of the contribution
+  prompt: >-
+    Write the paper's stated contribution in your own words, then judge
+    whether it is novel given the prior work the authors cite; name
+    concretely what is and isn't new.
+
+- id: methodology
+  title: Methodology reproducibility
+  prompt: >-
+    Summarize the methodology in enough detail that a reader could
+    reproduce the central experiment, and list every assumption the
+    methodology papers over.
+
+- id: logical-fallacies
+  title: Logical fallacies
+  prompt: >-
+    Look at the paper's logical argument, write out your understanding, then provide feedback.
+
+- id: quantitative-claims
+  title: Audit of quantitative claims
+  prompt: >-
+    Identify the strongest quantitative claim in the paper and audit its
+    evidence: is the comparison fair? are baselines current? are error
+    bars or statistical significance reported?
+
+- id: weak-point
+  title: Weakest link in the argument
+  prompt: >-
+    Find the single weakest link in the argument chain, the step where
+    the conclusion stops being entailed by the data, and explain exactly
+    why.
+
+- id: reproducibility
+  title: Reproducibility audit
+  prompt: >-
+    Evaluate reproducibility: what is missing from the paper (code, data,
+    seeds, compute, prompts, pretraining details) that would block an
+    independent re-implementation?
+
+- id: writing-framing
+  title: Writing and framing critique
+  prompt: >-
+    Critique the writing and framing: which sentences overclaim beyond
+    the evidence, and what would an adversarial reviewer put in their
+    first paragraph?
+
+- id: reviewer-verdict
+  title: Reviewer verdict
+  prompt: >-
+    If you were the assigned reviewer, state your recommendation
+    (accept / borderline / reject), assign a numeric score from 1 to 10,
+    and list the three changes that would most improve the paper.
+
+- id: expert-reviewer
+  title: Expert Reviewer
+  prompt: >-
+    You are an expert scientist being asked to do a peer review on the given the document provided for a prestigous journal.
+
+- id: mentor
+  title: Mentor
+  prompt: >-
+    You are an expert, senior scientist and your student has come to you with the following work. Review their work and provide feedback.

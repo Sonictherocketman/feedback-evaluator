@@ -1,0 +1,14 @@
+claude-agent-sdk
+anyio
+httpx
+numpy
+PyYAML
+pypdf
+
+[dev]
+pytest
+black
+semgrep
+
+[test]
+pytest
