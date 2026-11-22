@@ -6,8 +6,8 @@ from feedback_evaluator import extract
 
 # small, fast real PDF in the corpus (used as the only fixture that
 # needs to be a real PDF)
-REPO_PAPERS = Path(__file__).resolve().parents[2] / "papers"
-SMALL_PDF = REPO_PAPERS / "15306315.pdf"
+PAPERS_DIR = Path(__file__).resolve().parents[2] / "data" / "pdfs"
+SMALL_PDF = PAPERS_DIR / "1410.6612v1.pdf"
 
 
 def test_merge_pages_drops_blank_and_page_top_repeats():
@@ -37,15 +37,17 @@ def test_merge_pages_keeps_repeats_far_apart():
 def test_run_extracts_and_skips(tmp_path):
     papers = tmp_path / "papers"
     papers.mkdir()
-    shutil.copy(SMALL_PDF, papers / "15306315.pdf")
+    text = tmp_path / "text"
+    text.mkdir()
+    shutil.copy(SMALL_PDF, papers / SMALL_PDF.name)
 
-    rc = extract.run(papers_dir=papers)
+    rc = extract.run(papers_dir=papers, text_dir=text)
     assert rc == 0
-    out = papers / "text" / "15306315.txt"
+    out = text / f"{SMALL_PDF.stem}.txt"
     assert out.is_file() and out.stat().st_size > 1000
 
     # second run: nothing to do
-    rc = extract.run(papers_dir=papers)
+    rc = extract.run(papers_dir=papers, text_dir=text)
     assert rc == 0
     assert out.is_file()  # untouched
 
@@ -65,23 +67,36 @@ def test_run_salvages_pages_that_fail(tmp_path, monkeypatch):
     monkeypatch.setattr(pypdf.PageObject, "extract_text", flaky_extract)
     papers = tmp_path / "papers"
     papers.mkdir()
-    shutil.copy(SMALL_PDF, papers / "15306315.pdf")
+    text = tmp_path / "text"
+    text.mkdir()
+    shutil.copy(SMALL_PDF, papers / SMALL_PDF.name)
 
     lines: list[str] = []
-    assert extract.run(papers_dir=papers, out=lines.append) == 0
+    assert extract.run(papers_dir=papers, text_dir=text, out=lines.append) == 0
     assert any("dropped" in line for line in lines)
-    assert (papers / "text" / "15306315.txt").stat().st_size > 1000
+    assert (text / f"{SMALL_PDF.stem}.txt").stat().st_size > 1000
 
 
 def test_run_fails_on_bad_pdf(tmp_path):
     papers = tmp_path / "papers"
     papers.mkdir()
+    text = tmp_path / "text"
+    text.mkdir()
     (papers / "broken.pdf").write_bytes(b"not a pdf")
-    assert extract.run(papers_dir=papers) == 1
+    assert extract.run(papers_dir=papers, text_dir=text) == 1
 
 
 def test_run_dirs(tmp_path):
-    assert extract.run(papers_dir=tmp_path / "missing") == 1
+    text = tmp_path / "text"
+    text.mkdir()
+    # papers dir missing
+    assert extract.run(papers_dir=tmp_path / "missing", text_dir=text) == 1
+    # empty papers dir
     empty = tmp_path / "empty"
     empty.mkdir()
-    assert extract.run(papers_dir=empty) == 1
+    assert extract.run(papers_dir=empty, text_dir=text) == 1
+    # text dir missing (extract no longer creates it)
+    papers = tmp_path / "papers"
+    papers.mkdir()
+    shutil.copy(SMALL_PDF, papers / SMALL_PDF.name)
+    assert extract.run(papers_dir=papers, text_dir=tmp_path / "no_text") == 1

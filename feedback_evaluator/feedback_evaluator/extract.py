@@ -50,8 +50,8 @@ def extract_pdf_text(path: Path) -> tuple[str, int]:
     return merge_pages(pages), skipped
 
 
-def run(*, papers_dir, out=print, **_) -> int:
-    """Convert every PDF in *papers_dir* to papers/text/. 0 on success,
+def run(*, papers_dir, text_dir, out=print, **_) -> int:
+    """Convert every PDF in *papers_dir* to **text_dir**. 0 on success,
     1 if any PDF failed."""
     papers_dir = Path(papers_dir)
     if not papers_dir.is_dir():
@@ -61,8 +61,10 @@ def run(*, papers_dir, out=print, **_) -> int:
     if not pdfs:
         print(f"error: no PDFs found in {papers_dir}")
         return 1
-    text_dir = papers_dir / "text"
-    text_dir.mkdir(exist_ok=True)
+    text_dir = Path(text_dir)
+    if not text_dir.is_dir():
+        print(f"error: text directory not found: {text_dir}")
+        return 1
 
     done = skipped = errors = degraded = 0
     for pdf in pdfs:

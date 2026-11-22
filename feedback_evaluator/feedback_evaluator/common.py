@@ -43,8 +43,9 @@ def iter_jsonl(path: os.PathLike | str):
                 yield json.loads(line)
 
 
-def read_jsonl(path: os.PathLike | str) -> list[dict]:
-    return list(iter_jsonl(path))
+def is_number(value) -> bool:
+    """True for int/float but not bool (the usual Python gotcha)."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
 def write_text_atomic(path: os.PathLike | str, text: str) -> None:
@@ -62,36 +63,18 @@ def dump_jsonl(rows):
     return "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows)
 
 
-def dump_json(obj, indent: int = 2) -> str:
-    return json.dumps(obj, indent=indent, ensure_ascii=False) + "\n"
+def append_jsonl(path: os.PathLike | str, row: dict) -> None:
+    """Append one JSON object as a single line to *path* (creating it).
 
-
-def iter_lines_meta(path: os.PathLike | str):
-    """Yield (line_number, feedback_id, text) for the *prose* lines of a
-    feedback file.
-
-    Skips markdown headings, blank lines, ``>`` blockquote meta lines
-    (e.g. ``> scores: ...``), and the ``- Model:`` header bullet. Only
-    content in a section body (its bullets included) is yielded. Line
-    numbers are 1-based positions in the file; feedback_id is the id in
-    the most recent ``## [id] ...`` section heading (or None).
+    Line-buffered append so a long run can be killed and resumed: every
+    completed record is durable before the next one starts.
     """
     path = Path(path)
-    current_feedback_id: str | None = None
-    in_section = False
-    with path.open("r", encoding="utf-8") as fh:
-        for line_number, line in enumerate(fh, start=1):
-            stripped = line.strip()
-            if stripped.startswith("## [") and "]" in stripped:
-                current_feedback_id = (
-                    stripped[4:].split("]", 1)[0].strip() or None
-                )
-                in_section = True
-            elif stripped.startswith("#"):
-                in_section = False
-            elif stripped.startswith(">") or stripped.startswith(
-                ("- Model:", "- DOI:")
-            ):
-                continue
-            elif stripped and in_section:
-                yield line_number, current_feedback_id, line.rstrip("\n")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+        fh.flush()
+
+
+def dump_json(obj, indent: int = 2) -> str:
+    return json.dumps(obj, indent=indent, ensure_ascii=False) + "\n"

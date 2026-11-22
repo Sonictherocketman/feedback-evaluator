@@ -10,8 +10,9 @@ import pytest
 
 from feedback_evaluator import doi
 
-# repo root is two levels up from this tests/ directory
-PAPERS_DIR = Path(__file__).resolve().parents[2] / "papers"
+# repo root is two levels up from this tests/ directory; the corpus lives
+# under data/pdfs
+PAPERS_DIR = Path(__file__).resolve().parents[2] / "data" / "pdfs"
 
 
 def test_doi_from_doiorg_link():
@@ -71,16 +72,11 @@ def test_doi_extract_from_broken_or_missing_pdf(tmp_path):
     ("name", "expected"),
     [
         # (paper, its own title-page DOI)
-        ("15306315.pdf", "10.1098/rspb.2004.2746"),
-        ("s41586-023-06137-x.pdf", "10.1038/s41586-023-06137-x"),
-        ("2611.25218.pdf", "10.5281/zenodo.23945788"),
-        (
-            "A-cognitive-fallacy-in-a-fish--Glass-catfish--"
-            "like-humans--make-s_2026_Cogni.pdf",
-            "10.1016/j.cognition.2026.106438",
-        ),
+        ("1203.0186v1.pdf", "10.3150/10-BEJ328"),
+        ("2006.06846v1.pdf", "10.3390/ma13102293"),
+        ("2111.00378v1.pdf", "10.1103/PhysRevA.104.012218"),
         # arXiv-only preprint: no DOI
-        ("1103.1676v1.pdf", None),
+        ("0705.1705v1.pdf", None),
     ],
 )
 def test_doi_against_real_papers(name, expected):

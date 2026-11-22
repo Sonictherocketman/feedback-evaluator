@@ -2,10 +2,9 @@
 
 Loads ``embeddings/embeddings.jsonl``, L2-normalizes the vectors with
 numpy, and computes all pairwise cosine similarities. Reports overall
-stats, cross-paper vs within-paper means (are the evaluations paper-
-specific, or interchangeable boilerplate?), the most similar pairs,
-near-duplicate pairs above a threshold, and per-paper coherence.
-Writes ``results/overlap_report.json``.
+stats, the full pair list (each pair carries its paper ids/DOIs, its
+prompt ids plus a ``same_prompt`` flag, and the human/LLM impact
+metrics), and per-paper coherence. Writes ``results/overlap_report.json``.
 """
 
 from __future__ import annotations
@@ -16,26 +15,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .common import iter_jsonl, utc_now_iso, write_text_atomic
-
-
-def _add_cross_paper_comparison(
-    report: dict, cross_scores: list[float], pair_rows: list[dict]
-) -> None:
-    cross = np.asarray(cross_scores)
-    within = np.asarray([r["cosine"] for r in pair_rows if r["same_paper"]])
-
-    if within.size and cross.mean() < within.mean():
-        interp = "cross-paper less similar → paper-specific feedback"
-    else:
-        interp = "cross-paper more similar → generic/boilerplate"
-
-    report["cross_paper_vs_within"] = {
-        "cross_paper_mean": float(cross.mean()),
-        "cross_paper_max": float(cross.max()),
-        "within_paper_mean": float(within.mean()) if within.size else None,
-        "interpretation": interp,
-    }
+from .common import is_number, iter_jsonl, utc_now_iso, write_text_atomic
 
 
 def _statistics(scores: list[float]) -> dict:
@@ -50,16 +30,48 @@ def _statistics(scores: list[float]) -> dict:
     }
 
 
+def pair_impact(a_unit: dict, b_unit: dict, citations: dict) -> dict:
+    """Impact metrics for two units, always populated where possible.
+
+    * total_human_impact: sum of the two papers' citation counts (a
+      paper-level value; known when either paper has a count).
+    * total_llm_impact / x_impact: sum and absolute difference of the
+      two units' impact scores, whenever both are numeric. Same-paper
+      rows (different prompts) are the control for prompt-variability;
+      cross-paper same-prompt rows are the treatment comparison — the
+      ``same_paper``/``same_prompt`` row fields let the analysis stage
+      filter either way.
+    * same_prompt: bool, for convenient filtering.
+    """
+    a_cit = citations.get(a_unit["paper"])
+    b_cit = citations.get(b_unit["paper"])
+    human = None
+    if a_cit is not None or b_cit is not None:
+        human = (a_cit or 0) + (b_cit or 0)
+
+    a_prompt = a_unit.get("prompt_id")
+    b_prompt = b_unit.get("prompt_id")
+    a_imp = a_unit.get("impact_score")
+    b_imp = b_unit.get("impact_score")
+    llm = x = None
+    if is_number(a_imp) and is_number(b_imp):
+        llm = round(a_imp + b_imp, 6)
+        x = round(abs(a_imp - b_imp), 6)
+    return {
+        "total_human_impact": human,
+        "total_llm_impact": llm,
+        "x_impact": x,
+        "same_prompt": bool(a_prompt) and a_prompt == b_prompt,
+    }
+
+
 def build_report(
     records: list[dict],
     *,
-    top: int = 10,
-    threshold: float = 0.95,
     within_papers: bool = False,
-    source: str = "",
 ) -> dict:
     """Compute the overlap report over embedding records (each with
-    'id', 'paper', 'line', 'vector'). Pure: returns a dict, writes nothing."""
+    'id', 'paper', 'vector'). Pure: returns a dict, writes nothing."""
     if len(records) < 2:
         raise ValueError("need at least 2 embeddings to compare")
 
@@ -89,9 +101,16 @@ def build_report(
             f"all-pair mode: {n} lines too many; " "use --within-papers"
         )
 
+    # paper-level citation count (first non-null value for the paper)
+    citations_by_paper: dict[str, int | None] = {}
+    for r in records:
+        if r.get("citations") is not None:
+            citations_by_paper.setdefault(r["paper"], r["citations"])
+    for paper in papers:
+        citations_by_paper.setdefault(paper, None)
+
     pair_rows: list[dict] = []
     all_scores: list[float] = []
-    cross_scores: list[float] = []
 
     def _compute_pair_scores(indices: np.ndarray) -> None:
         sub = matrix[indices]
@@ -103,20 +122,23 @@ def build_report(
             a_rec, b_rec = records[i], records[j]
             same = a_rec["paper"] == b_rec["paper"]
             all_scores.append(s)
-            if not same:
-                cross_scores.append(s)
-            pair_rows.append(
-                {
-                    "a": a_rec["id"],
-                    "b": b_rec["id"],
-                    "paper_a": a_rec["paper"],
-                    "paper_b": b_rec["paper"],
-                    "doi_a": doi_by_paper.get(a_rec["paper"]),
-                    "doi_b": doi_by_paper.get(b_rec["paper"]),
-                    "same_paper": same,
-                    "cosine": round(s, 6),
-                }
-            )
+            # every pair gets the impact metrics (same-paper rows are the
+            # control for prompt-variability; the prompt fields let the
+            # analysis stage filter)
+            row = {
+                "a": a_rec["id"],
+                "b": b_rec["id"],
+                "paper_a": a_rec["paper"],
+                "paper_b": b_rec["paper"],
+                "doi_a": doi_by_paper.get(a_rec["paper"]),
+                "doi_b": doi_by_paper.get(b_rec["paper"]),
+                "prompt_a": a_rec.get("prompt_id"),
+                "prompt_b": b_rec.get("prompt_id"),
+                "same_paper": same,
+                "cosine": round(s, 6),
+            }
+            row.update(pair_impact(a_rec, b_rec, citations_by_paper))
+            pair_rows.append(row)
 
     if within_papers:
         for indices in idx_by_paper.values():
@@ -127,8 +149,6 @@ def build_report(
 
     report = {
         "created_at": utc_now_iso(),
-        "source": source,
-        "n_lines": n,
         "papers": papers,
         "papers_dois": {k: v for k, v in doi_by_paper.items()},
         "scope": "within-papers" if within_papers else "all-pairs",
@@ -136,20 +156,11 @@ def build_report(
         "cosine_stats": _statistics(all_scores),
     }
 
-    if cross_scores:
-        _add_cross_paper_comparison(report, cross_scores, pair_rows)
-
-    report["top_pairs"] = sorted(pair_rows, key=lambda r: -r["cosine"])[:top]
-    near = [r for r in pair_rows if r["cosine"] >= threshold]
-    report["near_duplicate_pairs"] = {
-        "threshold": threshold,
-        "count": len(near),
-        "pairs": near,
-    }
+    report["pairs"] = sorted(pair_rows, key=lambda r: -r["cosine"])
 
     per_paper = {}
     for paper, indices in sorted(idx_by_paper.items()):
-        stats = {"lines": len(indices)}
+        stats = {"units": len(indices)}
         if len(indices) >= 2:
             sub = matrix[np.asarray(indices)]
             d = sub @ sub.T
@@ -166,8 +177,7 @@ def build_report(
     return report
 
 
-def print_report(report: dict, records: list[dict]) -> None:
-    by_id = {r["id"]: r for r in records}
+def print_report(report: dict) -> None:
     stats = report["cosine_stats"]
     print(f"\nCosine stats ({report['n_pairs']} pairs):")
     print(
@@ -175,53 +185,13 @@ def print_report(report: dict, records: list[dict]) -> None:
         f"p05={stats['p05']:.4f} p95={stats['p95']:.4f} "
         f"min={stats['min']:.4f} max={stats['max']:.4f}"
     )
-    cross_vs_within = report.get("cross_paper_vs_within")
-    if cross_vs_within:
-        print(
-            f"  cross-paper mean: {cross_vs_within['cross_paper_mean']:.4f} "
-            f"({cross_vs_within['interpretation']})"
-        )
-
-    top_pairs = report.get("top_pairs", [])
-    if top_pairs:
-        print(f"\nTop {len(top_pairs)} similar pairs:")
-        for pair in top_pairs:
-            print(f"  cos={pair['cosine']:.4f}  {pair['a']} <-> {pair['b']}")
-            if pair["a"] in by_id:
-                print(f"      A: {by_id[pair['a']]['line'][:96]}")
-            if pair["b"] in by_id:
-                print(f"      B: {by_id[pair['b']]['line'][:96]}")
-
-    near_dup = report.get("near_duplicate_pairs", {})
-    if near_dup.get("count"):
-        print(
-            f"\nNear-duplicate pairs (cos >= {near_dup['threshold']}): "
-            f"{near_dup['count']}"
-        )
-        for pair in near_dup["pairs"][:10]:
-            print(f"  {pair['cosine']:.4f}  {pair['a']} <-> {pair['b']}")
-        if near_dup["count"] > 10:
-            print("  ... and more (see JSON report)")
-
-    print(f"\nPer-paper coherence ({report['scope']}):")
-    for paper, stats in report["per_paper"].items():
-        if "intra_paper_mean" in stats:
-            print(
-                f"  {paper}: mean={stats['intra_paper_mean']:.4f} "
-                f"max={stats['intra_paper_max']:.4f} lines={stats['lines']}"
-            )
-        else:
-            print(f"  {paper}: {stats['lines']} line, no pairs")
 
 
 def run(
     *,
     embeddings_file,
     out_dir,
-    top=10,
-    threshold=0.95,
     within_papers=False,
-    **kwargs,
 ) -> int:
     """Compute and write the overlap report. 0 on success, 1 on failure."""
     embeddings_file = Path(embeddings_file)
@@ -234,17 +204,11 @@ def run(
         f"({'within-paper' if within_papers else 'all-pair'} mode)"
     )
     try:
-        report = build_report(
-            records,
-            top=top,
-            threshold=threshold,
-            within_papers=within_papers,
-            source=str(embeddings_file),
-        )
+        report = build_report(records, within_papers=within_papers)
     except ValueError as exc:
         print(f"error: {exc}")
         return 1
-    print_report(report, records)
+    print_report(report)
 
     out_path = Path(out_dir) / "overlap_report.json"
     write_text_atomic(

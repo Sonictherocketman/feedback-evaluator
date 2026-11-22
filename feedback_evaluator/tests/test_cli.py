@@ -23,11 +23,8 @@ def test_cli_parses_all_subcommands():
     )
     assert args.command == "embed" and args.api_key == "k"
     assert args.batch_size == 4
-    args = p.parse_args(
-        ["compare", "--top", "5", "--threshold", "0.9", "--within-papers"]
-    )
-    assert args.command == "compare" and args.top == 5
-    assert args.threshold == 0.9 and args.within_papers
+    args = p.parse_args(["compare", "--within-papers"])
+    assert args.command == "compare" and args.within_papers
     with pytest.raises(SystemExit):
         p.parse_args([])  # subcommand required
 
@@ -42,7 +39,15 @@ def test_cli_extract_delegates(monkeypatch, tmp_path):
         return 0
 
     monkeypatch.setattr(extract, "run", fake_run)
-    rc = cli.main(["extract", "--papers-dir", str(tmp_path)])
+    rc = cli.main(
+        [
+            "extract",
+            "--papers-dir",
+            str(tmp_path),
+            "--text-dir",
+            str(tmp_path / "text"),
+        ]
+    )
     assert rc == 0
     assert calls["papers_dir"] == tmp_path
 
@@ -58,12 +63,26 @@ def test_cli_eval_delegates(monkeypatch, tmp_path):
         return 0
 
     monkeypatch.setattr(evaluator, "run", fake_run)
-    rc = cli.main(["eval", "--papers-dir", str(tmp_path), "--model", "haiku"])
+    rc = cli.main(
+        [
+            "eval",
+            "--papers-dir",
+            str(tmp_path),
+            "--model",
+            "haiku",
+            "--data-catalog",
+            str(tmp_path / "catalog.jsonl"),
+            "--text-dir",
+            str(tmp_path / "text"),
+        ]
+    )
     assert rc == 0
     assert calls["papers_dir"] == tmp_path
     assert calls["model"] == "haiku"
     assert calls["system"].name == "system.md"
     assert calls["catalog"].name == "catalog.yaml"
+    assert calls["data_catalog"].name == "catalog.jsonl"
+    assert calls["text_dir"].name == "text"
 
 
 def test_cli_embed_env_defaults(monkeypatch, tmp_path):
@@ -96,17 +115,17 @@ def test_cli_compare_delegates(monkeypatch, tmp_path):
         return 0
 
     monkeypatch.setattr(cmp, "run", fake_run)
-    rc = cli.main(["compare", "--top", "3"])
+    rc = cli.main(["compare"])
     assert rc == 0
-    assert calls["top"] == 3
+    assert calls["within_papers"] is False
     assert calls["embeddings_file"].name == "embeddings.jsonl"
 
     # compare against build_report stays coherent: the report it writes is
     # what build_report returns.
     report = build_report(
         [
-            {"id": "a", "paper": "p", "line": "x", "vector": [1, 0]},
-            {"id": "b", "paper": "p", "line": "y", "vector": [0, 1]},
+            {"id": "a", "paper": "p", "vector": [1, 0]},
+            {"id": "b", "paper": "p", "vector": [0, 1]},
         ]
     )
     assert report["cosine_stats"]["mean"] == 0.0

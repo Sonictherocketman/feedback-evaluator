@@ -1,8 +1,8 @@
-"""``feedback_evaluator`` — CLI dispatcher for the eval / embed / compare pipeline.
+"""``feedback_evaluator`` — CLI dispatcher for the pipeline.
 
-All path options are relative to the current directory, so run from the
-repository root where papers/, prompts/, feedback/, embeddings/ and
-results/ live (see README).
+Stages: extract -> eval -> embed -> compare. All path options are
+relative to the current directory; the Makefile drives the stages with
+repo-root paths (data/pdfs, data/text, data/feedback, ...).
 """
 
 from __future__ import annotations
@@ -18,16 +18,17 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="feedback_evaluator",
         description="Evaluate papers with a Claude Code agent, embed the "
-        "feedback lines, and compare the embeddings.",
+        "feedback units, and compare the embeddings.",
     )
     sub = p.add_subparsers(dest="command", required=True)
 
     # Extract
 
     x = sub.add_parser(
-        "extract", help="convert papers/*.pdf to papers/text/*.txt"
+        "extract", help="convert PDFs to text (papers/*.pdf -> text dir)"
     )
     x.add_argument("--papers-dir", type=Path, default=Path("papers"))
+    x.add_argument("--text-dir", type=Path, default=Path("text"))
 
     # Eval
 
@@ -47,6 +48,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     e.add_argument("--feedback-dir", type=Path, default=Path("feedback"))
     e.add_argument(
+        "--data-catalog",
+        type=Path,
+        default=None,
+        help="S2-enriched data catalogue JSONL (arxiv + S2 + pdf links), "
+        "joined by pdf filename for doi/citations; optional",
+    )
+    e.add_argument(
+        "--text-dir",
+        type=Path,
+        default=None,
+        help="directory of extracted paper texts; a paper is passed as "
+        "text when <text-dir>/<file>.txt exists, else as the PDF",
+    )
+    e.add_argument(
         "--model",
         default=None,
         help="tier alias sonnet/opus/haiku (default $CLAUDE_MODEL "
@@ -61,9 +76,15 @@ def build_parser() -> argparse.ArgumentParser:
     # Embed
 
     b = sub.add_parser(
-        "embed", help="embed feedback lines via an embedding server"
+        "embed",
+        help="embed each evaluation unit (evaluations.jsonl) via a server",
     )
-    b.add_argument("--feedback-dir", type=Path, default=Path("feedback"))
+    b.add_argument(
+        "--feedback-dir",
+        type=Path,
+        default=Path("feedback"),
+        help="directory holding evaluations.jsonl (one unit per line)",
+    )
     b.add_argument("--out-dir", type=Path, default=Path("embeddings"))
     b.add_argument(
         "--embed-url",
@@ -95,13 +116,6 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path("embeddings/embeddings.jsonl"),
     )
     c.add_argument("--out-dir", type=Path, default=Path("results"))
-    c.add_argument("--top", type=int, default=10)
-    c.add_argument(
-        "--threshold",
-        type=float,
-        default=0.95,
-        help="near-duplicate cosine threshold",
-    )
     c.add_argument(
         "--within-papers", action="store_true", help="only within-paper pairs"
     )
@@ -119,7 +133,7 @@ def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
 
     if args.command == "extract":
-        return extract.run(papers_dir=args.papers_dir)
+        return extract.run(papers_dir=args.papers_dir, text_dir=args.text_dir)
 
     if args.command == "eval":
         return evaluator.run(
@@ -127,6 +141,8 @@ def main(argv=None) -> int:
             system=args.system,
             catalog=args.catalog,
             feedback_dir=args.feedback_dir,
+            data_catalog=args.data_catalog,
+            text_dir=args.text_dir,
             model=args.model,
             resume=args.resume,
         )
@@ -146,7 +162,5 @@ def main(argv=None) -> int:
     return compare.run(
         embeddings_file=args.embeddings_file,
         out_dir=args.out_dir,
-        top=args.top,
-        threshold=args.threshold,
         within_papers=args.within_papers,
     )

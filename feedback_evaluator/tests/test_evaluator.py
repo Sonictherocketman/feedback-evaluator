@@ -227,3 +227,83 @@ def test_render_feedback_file_shows_warnings():
         "p", [Prompt("a", "A", "q")], records, set(), "sonnet"
     )
     assert "> warning: agent failed: subtype=x" in markdown
+
+
+def test_cli_eval_forwards_data_catalog_to_run(tmp_path, monkeypatch):
+    """Regression: every CLI --flag for eval must reach evaluator.run as
+    its named kwarg. A mismatch (e.g. data_catalog vs catalog_data) used
+    to land silently in run()'s **_ grab-bag, dropping the catalogue so
+    every record got doi=null / citations=null."""
+    import json
+    import shutil
+    from pathlib import Path
+
+    from feedback_evaluator import cli
+
+    papers = tmp_path / "pdfs"
+    papers.mkdir()
+    src = (
+        Path(__file__).resolve().parents[2]
+        / "data"
+        / "pdfs"
+        / "1410.6612v1.pdf"
+    )
+    shutil.copy(src, papers / "1410.6612v1.pdf")
+
+    system = tmp_path / "system.md"
+    system.write_text("You critique papers.\n")
+    catalog = tmp_path / "catalog.yaml"
+    catalog.write_text("- prompt: rate the paper\n")
+
+    data_catalog = tmp_path / "data.jsonl"
+    data_catalog.write_text(
+        json.dumps(
+            {
+                "pdf_path": str(papers / "1410.6612v1.pdf"),
+                "doi": "10.48550/arXiv.1410.6612",
+                "citation_count": 7,
+            }
+        )
+        + "\n"
+    )
+
+    # stub out the agent (no SDK session) and the PDF-DOI fallback (so a
+    # non-null doi proves the value came from --data-catalog, not the PDF)
+    monkeypatch.setattr(
+        evaluator,
+        "evaluate_one",
+        lambda prompt, read_ref, options: (
+            "Fine work overall.\n\n```json\n"
+            '{"originality_score": 3, "overall_paper_score": 4, '
+            '"impact_score": 5}\n```',
+            [],
+        ),
+    )
+    monkeypatch.setattr(evaluator, "extract_doi", lambda path: "WRONG-DOI")
+
+    rc = cli.main(
+        [
+            "eval",
+            "--papers-dir",
+            str(papers),
+            "--system",
+            str(system),
+            "--catalog",
+            str(catalog),
+            "--feedback-dir",
+            str(tmp_path / "feedback"),
+            "--data-catalog",
+            str(data_catalog),
+        ]
+    )
+    assert rc == 0
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "feedback" / "evaluations.jsonl")
+        .read_text()
+        .splitlines()
+        if line.strip()
+    ]
+    assert len(rows) == 1
+    assert rows[0]["doi"] == "10.48550/arXiv.1410.6612"
+    assert rows[0]["citations"] == 7

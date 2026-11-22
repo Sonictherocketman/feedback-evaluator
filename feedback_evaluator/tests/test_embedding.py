@@ -7,43 +7,38 @@ import pytest
 
 from feedback_evaluator import embedding
 
-FEEDBACK_MD = """# Feedback: p1
+UNIT_A = {
+    "paper_id": "p1",
+    "doi": "10.9999/a.1",
+    "prompt_id": "P1",
+    "feedback_id": "p1-P1",
+    "feedback": "alpha body line one.\nalpha body line two.",
+    "originality_score": 3,
+    "overall_paper_score": 4,
+    "impact_score": 5,
+    "citations": 12,
+    "model": "sonnet",
+    "created_at": "t",
+}
+UNIT_B = {
+    "paper_id": "p2",
+    "doi": None,
+    "prompt_id": "P2",
+    "feedback_id": "p2-P2",
+    "feedback": "beta body line.",
+    "originality_score": None,
+    "overall_paper_score": None,
+    "impact_score": None,
+    "citations": None,
+    "model": "sonnet",
+    "created_at": "t",
+}
 
-- Model: sonnet
 
-## [p1-a] Section A
-
-alpha body line one.
-alpha body line two.
-
-> scores: originality_score=3, overall_paper_score=4, impact_score=5
-
-## [p1-b] Section B
-
-beta body line.
-"""
-
-
-FEEDBACK_MD_WITH_DOI = FEEDBACK_MD.replace(
-    "# Feedback: p1\n", "# Feedback: p1\n\n- DOI: 10.9999/sample.1\n", 1
-)
-
-
-def feedback_file(tmp_path, with_doi=False):
-    path = tmp_path / "p1.md"
-    path.write_text(FEEDBACK_MD_WITH_DOI if with_doi else FEEDBACK_MD)
+def write_evaluations(feedback_dir, units):
+    path = feedback_dir / "evaluations.jsonl"
+    path.write_text("".join(json.dumps(u) + "\n" for u in units))
     return path
-
-
-def test_iter_feedback_lines(tmp_path):
-    # prose lines only; headings, blanks, "> " meta, and the "- Model:"
-    # header bullet are skipped; line numbers are 1-based
-    got = embedding.iter_feedback_lines(feedback_file(tmp_path))
-    assert got == [
-        embedding.FeedbackLine(7, "p1-a", "alpha body line one."),
-        embedding.FeedbackLine(8, "p1-a", "alpha body line two."),
-        embedding.FeedbackLine(14, "p1-b", "beta body line."),
-    ]
 
 
 @pytest.fixture()
@@ -98,17 +93,19 @@ def fake_server():
     server.shutdown()
 
 
-def test_feedback_doi(tmp_path):
-    assert embedding.feedback_doi(feedback_file(tmp_path)) is None
-    path = feedback_file(tmp_path, with_doi=True)
-    assert embedding.feedback_doi(path) == "10.9999/sample.1"
+def test_unit_records_dedupes_and_keeps_order(tmp_path):
+    feedback_dir = tmp_path / "feedback"
+    feedback_dir.mkdir()
+    write_evaluations(feedback_dir, [UNIT_A, UNIT_B, UNIT_A])
+    rows = embedding.unit_records(feedback_dir / "evaluations.jsonl")
+    assert [row["feedback_id"] for row in rows] == ["p1-P1", "p2-P2"]
 
 
 def test_run_end_to_end(tmp_path, fake_server):
     base_url, handler, seen = fake_server
     feedback_dir = tmp_path / "feedback"
     feedback_dir.mkdir()
-    feedback_file(feedback_dir)
+    write_evaluations(feedback_dir, [UNIT_A, UNIT_B])
 
     rc = embedding.run(
         feedback_dir=feedback_dir,
@@ -126,51 +123,38 @@ def test_run_end_to_end(tmp_path, fake_server):
         for line in open(tmp_path / "embeddings" / "embeddings.jsonl")
         if line.strip()
     ]
-    assert [row["id"] for row in rows] == ["p1#L7", "p1#L8", "p1#L14"]
-    assert rows[0]["paper"] == "p1" and rows[0]["feedback_id"] == "p1-a"
-    assert rows[0]["line_number"] == 7
-    assert all(row["doi"] is None for row in rows)
-    assert rows[2]["feedback_id"] == "p1-b"
+    # one record per evaluation unit, keyed <paper_id>#<feedback_id>
+    assert [row["id"] for row in rows] == ["p1#p1-P1", "p2#p2-P2"]
+    assert rows[0]["paper"] == "p1" and rows[0]["feedback_id"] == "p1-P1"
+    assert rows[0]["text"] == UNIT_A["feedback"]
+    # scores/metadata carried straight from the evaluation record
+    assert rows[0]["doi"] == "10.9999/a.1"
+    assert rows[0]["citations"] == 12
+    assert rows[0]["prompt_id"] == "P1"
+    assert rows[0]["impact_score"] == 5
+    # a null-DOI unit stays null (no header fallback to fall through to)
+    assert rows[1]["doi"] is None
+    assert rows[1]["citations"] is None
+    assert rows[1]["prompt_id"] == "P2"
+    # the feedback/*.md is a human artifact: absent here, and unneeded
+    assert list(feedback_dir.glob("*.md")) == []
     assert all(row["dim"] == 8 and len(row["vector"]) == 8 for row in rows)
     assert rows[0]["model"] == "m1"
 
     manifest = json.load(open(tmp_path / "embeddings" / "manifest.json"))
     assert manifest["dim"] == 8
-    assert manifest["total_lines"] == 3
+    assert manifest["total_units"] == 2
     assert manifest["model"] == "m1"
     assert manifest["server"] == base_url + "/v1"
-    assert manifest["files"]["p1"]["lines"] == 3
-    assert manifest["papers"] == ["p1"]
+    assert manifest["units_per_paper"] == {"p1": 1, "p2": 1}
+    assert manifest["papers"] == ["p1", "p2"]
 
 
-def test_run_end_to_end_carries_doi(tmp_path, fake_server):
-    base_url, _, _ = fake_server
-    feedback_dir = tmp_path / "feedback"
-    feedback_dir.mkdir()
-    feedback_file(feedback_dir, with_doi=True)
-
-    rc = embedding.run(
-        feedback_dir=feedback_dir,
-        out_dir=tmp_path / "embeddings",
-        embed_url=base_url + "/v1",
-        model="m1",
-        api_key="",
-    )
-    assert rc == 0
-    rows = [
-        json.loads(line)
-        for line in open(tmp_path / "embeddings" / "embeddings.jsonl")
-        if line.strip()
-    ]
-    # the two extra header lines shift the prose line numbers down by 2
-    assert [row["id"] for row in rows] == ["p1#L9", "p1#L10", "p1#L16"]
-    assert all(row["doi"] == "10.9999/sample.1" for row in rows)
-
-
-def test_run_no_feedback(tmp_path, fake_server):
+def test_run_no_evaluations(tmp_path, fake_server):
     base_url, _, _ = fake_server
     empty_dir = tmp_path / "feedback"
     empty_dir.mkdir()
+    # feedback dir without evaluations.jsonl
     assert (
         embedding.run(
             feedback_dir=empty_dir,

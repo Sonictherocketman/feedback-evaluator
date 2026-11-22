@@ -1,40 +1,64 @@
-# Repo-level checks and pipeline for the feedback_evaluator package.
+# Repo build file. Sections: getting data, running the analysis,
+# plots, paper, developer checks. `make help` lists every target.
 #
 # Every target is pinned to the repo root (this Makefile's directory),
 # so `make` works from any subdirectory.
 #
+# Data lives under data/ (catalog/, pdfs/, text/, feedback/,
+# embeddings/, results/); overrides: DATA, PLOTS, PROMPTS, N_PAPERS,
+# and per-stage *_ARGS, e.g.
+#   make eval EVAL_ARGS="--model opus --resume"
+#
 # Dev tools (black, semgrep, pytest) live in the package's `dev` extra:
 #   pip install -e "feedback_evaluator[dev]"
-#
-# `eval`, `embed`, `compare` are the pipeline stages (the CLI's path
-# options resolve against the repo root: papers/, prompts/, ...);
-# `run` runs them all in order. Override each with e.g.
-# `make eval EVAL_ARGS="--model opus --resume"`.
 
 ROOT       := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 PKG        := feedback_evaluator
 PY         ?= python3
-EXTRACT_ARGS ?= --papers-dir $(ROOT)/papers
-EVAL_ARGS  ?= --papers-dir $(ROOT)/papers --system $(ROOT)/prompts/system.md --catalog $(ROOT)/prompts/catalog.yaml --feedback-dir $(ROOT)/feedback --model partner --resume
-EMBED_ARGS ?= --feedback-dir $(ROOT)/feedback --out-dir $(ROOT)/embeddings
-COMPARE_ARGS ?= --embeddings-file $(ROOT)/embeddings/embeddings.jsonl --out-dir $(ROOT)/results
+DATA       ?= $(ROOT)/data
+PLOTS       ?= $(ROOT)/plots
+PROMPTS    ?= $(ROOT)/prompts
+EXTRACT_ARGS ?= --papers-dir $(DATA)/pdfs --text-dir $(DATA)/text
+EVAL_ARGS  ?= --papers-dir $(DATA)/pdfs --system $(PROMPTS)/system.md --catalog $(PROMPTS)/catalog.yaml --feedback-dir $(DATA)/feedback --data-catalog $(DATA)/catalog/arxiv-w-s2-w-papers.$(N_PAPERS).jsonl --text-dir $(DATA)/text --model partner --resume
+EMBED_ARGS ?= --feedback-dir $(DATA)/feedback --out-dir $(DATA)/embeddings
+COMPARE_ARGS ?= --embeddings-file $(DATA)/embeddings/embeddings.jsonl --out-dir $(DATA)/results
+N_PAPERS   ?= 200
 
-.PHONY: help install format format-check test coverage extract eval embed compare run scan checks clean
+.PHONY: help install format format-check test coverage get-archive filter-by-doi \
+	subset enrich-via-s2 download-pdfs extract-text prepare \
+	eval embed compare run plot-raw-citations plots scan checks clean
 
 help:
-	@echo "make install         install the package + dev tools (editable)"
-	@echo "make format          black-format the package and tests"
-	@echo "make format-check    black --check (no writes); fails if unformatted"
-	@echo "make test            run the pytest suite (with coverage)"
-	@echo "make coverage        tests + coverage table, and htmlcov/ report"
-	@echo "make extract         stage 0: papers/*.pdf -> papers/text/*.txt"
-	@echo "make eval            stage 1: paper critiques -> feedback/"
-	@echo "make embed           stage 2: feedback lines -> embeddings/"
-	@echo "make compare         stage 3: embedding overlap -> results/"
-	@echo "make run             extract -> eval -> embed -> compare (all)"
-	@echo "make scan            semgrep security/bug scan"
-	@echo "make checks          all checks: format-check + test + scan"
-	@echo "make clean           remove build/bytecode artifacts"
+	@echo "Setup"
+	@echo "  make install              install the package + dev tools (editable)"
+	@echo ""
+	@echo "Getting data (data/ catalog -> pdfs -> text)"
+	@echo "  make get-archive          download the arXiv metadata dataset to data/catalog/"
+	@echo "  make filter-by-doi        keep catalog entries that have a DOI"
+	@echo "  make subset               random $(N_PAPERS) (N_PAPERS=... to override)"
+	@echo "  make enrich-via-s2        enrich the subset with Semantic-Scholar metadata"
+	@echo "  make download-pdfs        fetch the full-text PDFs -> data/pdfs/"
+	@echo "  make extract-text         papers/*.pdf -> data/text/*.txt (feedback_evaluator extract)"
+	@echo "  make prepare              get-archive -> ... -> extract-text (whole data prep)"
+	@echo ""
+	@echo "Running the analysis"
+	@echo "  make eval                 stage 1: paper critiques      -> data/feedback/"
+	@echo "  make embed                stage 2: embedding units      -> data/embeddings/"
+	@echo "  make compare              stage 3: embedding overlap    -> data/results/"
+	@echo "  make run                  extract-text -> eval -> embed -> compare (all)"
+	@echo ""
+	@echo "Plots (R)"
+	@echo "  make plot-raw-citations   citations vs age -> plots/"
+	@echo "  make plots                all plot targets"
+	@echo ""
+	@echo "Developer checks"
+	@echo "  make format               black-format the package and tests"
+	@echo "  make format-check         black --check; fails if unformatted"
+	@echo "  make test                 run the pytest suite (with coverage)"
+	@echo "  make coverage             tests + coverage table, and htmlcov/ report"
+	@echo "  make scan                 semgrep security/bug scan"
+	@echo "  make checks               all checks: format-check + test + scan"
+	@echo "  make clean                remove build/bytecode/coverage artifacts"
 
 install:
 	cd $(ROOT) && $(PY) -m pip install -e "$(PKG)[dev]"
@@ -53,8 +77,48 @@ coverage:
 		--cov-report=term-missing --cov-report=html:htmlcov
 	@echo "html report: $(ROOT)/$(PKG)/htmlcov/index.html"
 
-extract:
+# Getting data
+
+get-archive:
+    cd $(DATA)/catalog && curl -L -o arxiv.zip \
+		https://www.kaggle.com/api/v1/datasets/download/Cornell-University/arxiv && \
+		unzip arxiv
+	@echo "archive downloaded to data/catalog/ and unzipped"
+
+filter-by-doi:
+	cd $(DATA)/catalog && \
+		jq -c 'select(.doi != null)' \
+			arxiv-metadata-oai-snapshot.json > \
+			non-null-doi.jsonl
+	@echo "removed items without a valid DOI"
+
+# TODO: Filter by recency (now>x>5yo?)
+subset:
+	cd $(DATA)/catalog && \
+	cat non-null-doi.jsonl | shuf | head -n $(N_PAPERS) > subset.$(N_PAPERS).jsonl
+	@echo "Truncated to $(N_PAPERS) records"
+
+enrich-via-s2:
+	cd $(DATA)/catalog && $(PY) $(ROOT)/scripts/enrich-via-s2.py \
+		subset.$(N_PAPERS).jsonl \
+		arxiv-w-s2.$(N_PAPERS).jsonl
+	@echo "enriched dataset with metadata from S2"
+
+download-pdfs:
+	cd $(DATA)/catalog && $(PY) $(ROOT)/scripts/fetch-pdfs.py \
+		arxiv-w-s2.$(N_PAPERS).jsonl \
+		arxiv-w-s2-w-papers.$(N_PAPERS).jsonl \
+		$(DATA)/pdfs
+	@echo "downloaded the fulltext pdfs to data/pdfs"
+
+extract-text:
 	cd $(ROOT)/$(PKG) && $(PY) -m feedback_evaluator extract $(EXTRACT_ARGS)
+	@echo "extracted the text from the pdfs to data/text/"
+
+prepare: get-archive filter-by-doi subset enrich-via-s2 download-pdfs extract-text
+	@echo "==> done"
+
+# Running the analysis
 
 eval:
 	cd $(ROOT)/$(PKG) && $(PY) -m feedback_evaluator eval $(EVAL_ARGS)
@@ -65,8 +129,23 @@ embed:
 compare:
 	cd $(ROOT)/$(PKG) && $(PY) -m feedback_evaluator compare $(COMPARE_ARGS)
 
-run: extract eval embed compare
+run: extract-text eval embed compare
 	@echo "==> done"
+
+# Plots
+
+plot-raw-citations:
+	Rscript $(ROOT)/scripts/plot-citations.r \
+		$(DATA)/catalog/arxiv-w-s2.$(N_PAPERS).jsonl \
+		$(PLOTS)/citations_vs_age.png
+
+plots: plot-raw-citations
+
+# Paper
+
+# TODO: Typeset
+
+# Developer checks
 
 scan:
 	@command -v semgrep >/dev/null 2>&1 || { \

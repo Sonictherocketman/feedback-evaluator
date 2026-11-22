@@ -1,14 +1,16 @@
 # feedback_evaluator
 
 A small installable package that critiques academic papers with a Claude
-Code agent, embeds the resulting feedback lines, and compares the
-embeddings for overlap.
+Code agent, embeds the resulting feedback **sections** (one per catalogue
+prompt — the unit of evaluation), and compares the embeddings for
+overlap, cross-checked against each paper's citation count.
 
 ```
-extract   convert papers/*.pdf -> papers/text/*.txt (resumable)
-eval      run one Claude Code agent session per (paper, prompt)
-embed     embed each prose line of the feedback via an embedding server
-compare   pairwise cosine over the embeddings -> overlap report
+extract   convert papers/*.pdf -> a text dir/*.txt (resumable)
+eval      run one Claude Code agent session per (paper, prompt);
+          writes the markdown critique + a resumable evaluations.jsonl
+embed     embed one unit per evaluations.jsonl record via a server
+compare   pairwise cosine over the units -> overlap report
 ```
 
 ## Install
@@ -17,110 +19,167 @@ compare   pairwise cosine over the embeddings -> overlap report
 pip install -e .            # or: -e ".[dev]" to include pytest + black + semgrep
 ```
 
-Run everything from the repo root — path options default to
-CWD-relative: `papers/`, `prompts/`, `feedback/`, `embeddings/`,
-`results/`.
+Run everything from the repo root. Path options default to CWD-relative,
+and the Makefile pins every stage to the repo-root `data/` tree
+(`data/pdfs`, `data/text`, `data/feedback`, `data/embeddings`,
+`data/results`).
 
 ## Usage
 
 ```bash
-feedback_evaluator extract         # papers/*.pdf -> papers/text/*.txt
-feedback_evaluator eval            # 16 papers x catalog prompts -> feedback/
-feedback_evaluator eval --resume --model opus
+feedback_evaluator extract --papers-dir data/pdfs --text-dir data/text
+feedback_evaluator eval \
+    --papers-dir data/pdfs \
+    --data-catalog data/catalog/arxiv-w-s2-w-papers.200.jsonl \
+    --text-dir data/text --model partner --resume
 feedback_evaluator embed --embed-url http://localhost:11434/v1 --model nomic-embed-text
-feedback_evaluator compare --threshold 0.9 --top 20
+feedback_evaluator compare
 ```
 
 (`python -m feedback_evaluator` works too.)
 
 - **extract** — converts each `papers/*.pdf` to
-  `papers/text/<paper>.txt` (pypdf text layer; figures are dropped,
+  `<text-dir>/<paper>.txt` (pypdf text layer; figures are dropped,
   equations come through as Unicode where the PDF's fonts allow).
   Existing non-empty files are skipped, so it's cheap to re-run as the
   corpus changes. A page that trips pypdf (e.g. a dense figure page
   hitting its token limit) is dropped with a `[warn]` count instead of
   failing the paper; only an all-failed PDF fails. Run this before
-  `eval`: the model is then given the text file, not the raw PDF
-  (`eval` falls back to the PDF per paper when no text file exists).
+  `eval`: the model is then given the text file, not the raw PDF (`eval`
+  falls back to the PDF per paper when no text file exists). `--text-dir`
+  must already exist — `extract` writes into it and does not create it.
 - **eval** — the agent session runs with the same process the Claude CLI
   uses (Claude Agent SDK): read-only (`dontAsk`), cwd = the directory you
   ran from, system prompt `prompts/system.md`, question prompts from
   `prompts/catalog.yaml`. Pass the tier alias `sonnet`/`opus`/`haiku`
-  as `--model`; the CLI maps it to your proxy models via
-  `ANTHROPIC_DEFAULT_{SONNET,OPUS,HAIKU}_MODEL` in
-  `.claude/settings.local.json`. Outputs: `feedback/<paper>.md` plus
-  `feedback/evaluations.jsonl` (paper_id, doi, prompt_id, feedback_id,
-  feedback text, originality_score, overall_paper_score, impact_score
-  per record). The paper's own **DOI** is extracted from the first two
-  PDF pages (`doi.py`: `doi.org` link → `DOI:` label → first bare
-  `10.xxxx/…` token) and stored as `doi` (null for arXiv-only
-  preprints); it also appears in the feedback file header
-  (`- DOI: …`).
+  (or a proxy model id) as `--model`; the CLI maps tier aliases to your
+  proxy models via `ANTHROPIC_DEFAULT_{SONNET,OPUS,HAIKU}_MODEL`.
+  Per record it outputs:
+    - `feedback/<paper>.md` — one `## [<feedback_id>]` section per prompt,
+      with a `- DOI: …` / `- Citations: N` / `- Model: …` header block.
+    - `feedback/evaluations.jsonl` — one record per completed
+      (paper, prompt): `paper_id`, `doi`, `prompt_id`, `feedback_id`,
+      `feedback`, `originality_score`, `overall_paper_score`,
+      `impact_score`, `citations`, `model`, … **Appended as each record
+      completes** (not rewritten at the end), so a killed run loses
+      nothing.
+  - **Resume is automatic**: on start, prior records are loaded from
+    `evaluations.jsonl` and any `(paper, prompt)` already present is
+    skipped, so re-running picks up where it left off (`--resume` is kept
+    for clarity/compat).
+  - **DOI + citations** come from `--data-catalog` (the S2-enriched data
+    pipeline's last output, one JSON object per line), joined by the PDF
+    file name recorded in each row's `pdf_path`. The paper's **DOI** is
+    taken from the catalogue; with no catalogue (or no row) it falls back
+    to scanning the PDF's first two pages (`doi.py`: `doi.org` link →
+    `DOI:` label → first bare `10.xxxx/…` token) and is null for
+    arXiv-only preprints. `citations` is the paper's citation count from
+    the catalogue (`citation_count`), else null.
 - **embed** — OpenAI-compatible `POST <url>/embeddings`; Bearer auth only
   when a key is given. Env: `EMBED_URL`, `EMBED_MODEL`, `EMBED_API_KEY`.
-  Outputs: `embeddings/embeddings.jsonl` (each record keeps its paper,
-  feedback section, line number, line text and vector) +
-  `embeddings/manifest.json`. Each record also carries the paper's
-  `doi` (read from its feedback file header).
-- **compare** — L2-normalized cosine for all pairs (or `--within-papers`),
-  cross- vs within-paper means, top similar pairs, near-duplicates above
-  `--threshold`, per-paper coherence, and a `papers_dois` map
-  (paper → DOI pulled from the embedding records; pairs also carry
-  `doi_a`/`doi_b`). Output: `results/overlap_report.json`.
+  **Embeds straight from `feedback/evaluations.jsonl`** — one unit per
+  record (the `feedback` field is the text sent to the server), so the
+  `feedback/*.md` files — rendered only for human reference — are never
+  parsed. Outputs: `embeddings/embeddings.jsonl` (each record keeps its
+  `id` = `<paper_id>#<feedback_id>`, `paper`, `feedback_id`, `prompt_id`,
+  `doi`, the feedback text, the three scores, `citations`, `model`, `dim`,
+  and the `vector`) + `embeddings/manifest.json` (per-paper unit counts).
+  Runs fail if `evaluations.jsonl` is missing or has no usable records.
+- **compare** — L2-normalized cosine over units (all pairs, or
+  `--within-papers` for within-paper only; all-pair mode above 10 000
+  units errors and points you to `--within-papers`). Reports cosine
+  stats, the **full pair list** sorted by similarity, and per-paper
+  coherence. Every pair row — cross-paper **and** within-paper — carries
+  its ids, `paper_a`/`paper_b`, `doi_a`/`doi_b`, `prompt_a`/`prompt_b`,
+  a `same_paper` flag, a `same_prompt` flag, and the **impact metrics**:
+    - `total_human_impact` — sum of the two papers' citation counts
+      (a paper-level value, null only if neither paper has a count).
+    - `total_llm_impact` / `x_impact` — the sum, and the absolute
+      difference, of the two units' `impact_score`s (null only if either
+      unit has no score).
+  Within-paper rows (same paper, different prompts) are the **control**
+  for prompt-variability; cross-paper same-prompt rows are the treatment
+  comparison. The `same_paper` / `same_prompt` flags let the analysis
+  stage (R) filter either population without re-deriving it. Output:
+  `results/overlap_report.json` (no `near_duplicate_pairs`, `source`, or
+  `n_lines` — the full `pairs` list is the data).
 
 ## Layout
 
 ```
+data/                         everything under the repo root (Makefile-owned)
+  catalog/                    arXiv → S2-enriched JSONL (data-acquisition)
+  pdfs/                       full-text PDFs
+  text/                       extracted paper text (extract stage)
+  feedback/                   <paper>.md + evaluations.jsonl (eval stage)
+  embeddings/                 embeddings.jsonl + manifest.json (embed)
+  results/                    overlap_report.json (compare)
 feedback_evaluator/            package: common, evaluator, embedding,
-                               compare, cli (+ __main__ for -m runs)
+                               compare, doi, extract, cli (+ __main__ for -m runs)
 tests/                         pytest suite (offline: the agent is never
                                called; the embed server is a local stub)
 ```
 
-The `scripts/` directory at the repo root is reserved for R plotting
-scripts against the results.
+The `scripts/` directory at the repo root holds the data-acquisition and
+R plotting scripts (`enrich-via-s2.py`, `fetch-pdfs.py`, `plot-citations.r`).
 
 ## Makefile (repo root)
 
-The checks and the pipeline run from a single `Makefile` at the repo
-root. First time: `make install` (installs the package with the `dev`
-extra — pytest, black, semgrep — editable).
+The data pipeline, analysis, plots, and dev checks all run from a single
+`Makefile` at the repo root. `make help` lists every target. First time:
+`make install` (installs the package with the `dev` extra — pytest,
+black, semgrep — editable).
 
 ```
-make install         pip install -e "feedback_evaluator[dev]"
-make format          black-format the package and tests
-make format-check    black --check — fails if anything is unformatted
-make test            run the pytest suite
-make extract         stage 0: papers/*.pdf -> papers/text/*.txt
-make eval            stage 1: paper critiques  -> feedback/
-make embed           stage 2: feedback lines   -> embeddings/
-make compare         stage 3: embedding overlap -> results/
-make run             extract -> eval -> embed -> compare (full pipeline)
-make scan            semgrep --error --config auto over the package
-make checks          all checks in CI order: format-check + test + scan
-make clean           remove build/bytecode artifacts
+# Setup
+make install              install the package + dev tools (editable)
+
+# Getting data (data/ catalog -> pdfs -> text)
+make get-archive          download the arXiv metadata dataset to data/catalog/
+make filter-by-doi        keep catalog entries that have a DOI
+make subset               random $(N_PAPERS)  (N_PAPERS=... to override)
+make enrich-via-s2        enrich the subset with Semantic-Scholar metadata
+make download-pdfs        fetch the full-text PDFs -> data/pdfs/
+make extract-text         papers/*.pdf -> data/text/*.txt (feedback_evaluator extract)
+make prepare              get-archive -> ... -> extract-text (whole data prep)
+
+# Running the analysis
+make eval                 stage 1: paper critiques    -> data/feedback/
+make embed                stage 2: feedback sections  -> data/embeddings/
+make compare              stage 3: embedding overlap  -> data/results/
+make run                  extract-text -> eval -> embed -> compare (all)
+
+# Plots (R)
+make plot-raw-citations   citations vs age -> plots/
+make plots                all plot targets
+
+# Developer checks
+make format               black-format the package and tests
+make format-check         black --check; fails if unformatted
+make test                 run the pytest suite (with coverage)
+make coverage             tests + coverage table, and htmlcov/ report
+make scan                 semgrep security/bug scan
+make checks               all checks: format-check + test + scan
+make clean                remove build/bytecode/coverage artifacts
 ```
 
-The stages are thin wrappers over the CLI, and every Makefile target
-pins its paths to the repo root — so `make` works from any
-subdirectory and the pipeline writes to the usual `papers/` →
-`feedback/` → `embeddings/` → `results/` flow. Extra flags go through
-the `*_ARGS` variables (on any stage, or through `make run`):
+Every Makefile target pins its paths to the repo root — so `make` works
+from any subdirectory and writes into `data/`. Extra flags go through the
+`*_ARGS` variables (on any stage, or through `make run`):
 
 ```bash
-make run EVAL_ARGS="--resume --model opus" \
-         EMBED_ARGS="--embed-url http://localhost:11434/v1 --model nomic-embed-text" \
-         COMPARE_ARGS="--threshold 0.9 --top 20"
+make run EVAL_ARGS="--model opus --resume" \
+         EMBED_ARGS="--embed-url http://localhost:11434/v1 --model nomic-embed-text"
 ```
 
 ## Formatting
 
 `black`, configured in `pyproject.toml` under `[tool.black]` — 79-column
-lines, Python 3.10 target, `.git`/`.venv`/egg-info excluded. After
-changing any `*.py` under this directory, run `make format` and
-`make test` from the repo root (also codified in the repo's CLAUDE.md).
-Note: `Makefile` recipes run `black` from inside this directory so
-`pyproject.toml`'s config is picked up automatically.
+lines, Python 3.10 target. After changing any `*.py` under this directory,
+run `make format` and `make test` from the repo root (also codified in the
+repo's CLAUDE.md). Note: the `Makefile` recipes run `black` from inside this
+directory so `pyproject.toml`'s config is picked up automatically. Write new
+code already black-clean so `make format` stays a no-op.
 
 ## Testing
 
@@ -128,8 +187,8 @@ From the repo root: `make test` (or `cd feedback_evaluator &&
 python -m pytest -q`). The suite is fully offline — the agent SDK is
 never invoked and the embedding server is a stdlib local stub. Coverage
 runs with every pytest invocation (pytest-cov, config in
-`pyproject.toml`); `make coverage` additionally writes an HTML report
-to `feedback_evaluator/htmlcov/`.
+`pyproject.toml`); `make coverage` additionally writes an HTML report to
+`feedback_evaluator/htmlcov/`. Keep overall coverage above 80%.
 
 ## Security scan
 
