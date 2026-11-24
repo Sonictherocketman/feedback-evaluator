@@ -65,6 +65,83 @@ def pair_impact(a_unit: dict, b_unit: dict, citations: dict) -> dict:
     }
 
 
+def avg_impact_by_paper(records: list[dict]) -> dict[str, float | None]:
+    """Each paper's mean impact_score, averaged over its prompts (only
+    scoring the units that actually have one)."""
+    sums: dict[str, list[float]] = defaultdict(list)
+    for r in records:
+        imp = r.get("impact_score")
+        if is_number(imp):
+            sums[r["paper"]].append(imp)
+    return {
+        paper: round(float(np.mean(vals)), 6) for paper, vals in sums.items()
+    }
+
+
+def build_paper_pairs(
+    matrix: np.ndarray,
+    idx_by_paper: dict[str, list[int]],
+    *,
+    doi_by_paper: dict[str, str | None],
+    citations_by_paper: dict[str, int | None],
+    avg_impact: dict[str, float | None],
+) -> list[dict]:
+    """Paper-level view: one row per *pair of distinct papers*, with the
+    LLM impact averaged over prompts (so prompt-wording variance is
+    smoothed out) and the mean cross-paper overlap between the two
+    papers. Complements ``pairs`` (the raw unit-level data) — the raw
+    rows stay for the underlying per-prompt analysis.
+    """
+    papers = sorted(idx_by_paper)
+    rows: list[dict] = []
+    for ai in range(len(papers)):
+        for bi in range(ai + 1, len(papers)):
+            pa, pb = papers[ai], papers[bi]
+            ia, ib = np.asarray(idx_by_paper[pa]), np.asarray(idx_by_paper[pb])
+            # mean cosine over all (unit in pa, unit in pb) combinations
+            cross = matrix[ia][:, :] @ matrix[ib].T
+            mean_cos = float(cross.mean())
+            a_imp = avg_impact.get(pa)
+            b_imp = avg_impact.get(pb)
+            avg_x = (
+                round(abs(a_imp - b_imp), 6)
+                if a_imp is not None and b_imp is not None
+                else None
+            )
+            a_cit, b_cit = (
+                citations_by_paper.get(pa),
+                citations_by_paper.get(pb),
+            )
+            # human impact is a paper-level value (citations), so there's
+            # no prompt variance to average over for a/b; the x is the abs
+            # difference, None when either paper has no citation count
+            human = None
+            if a_cit is not None or b_cit is not None:
+                human = (a_cit or 0) + (b_cit or 0)
+            x_human = (
+                abs(a_cit - b_cit)
+                if a_cit is not None and b_cit is not None
+                else None
+            )
+            rows.append(
+                {
+                    "paper_a": pa,
+                    "paper_b": pb,
+                    "doi_a": doi_by_paper.get(pa),
+                    "doi_b": doi_by_paper.get(pb),
+                    "avg_llm_impact_a": a_imp,
+                    "avg_llm_impact_b": b_imp,
+                    "avg_x_llm_impact": avg_x,
+                    "human_impact_a": a_cit,
+                    "human_impact_b": b_cit,
+                    "x_human_impact": x_human,
+                    "mean_cosine": round(mean_cos, 6),
+                    "total_human_impact": human,
+                }
+            )
+    return rows
+
+
 def build_report(
     records: list[dict],
     *,
@@ -100,6 +177,18 @@ def build_report(
         raise ValueError(
             f"all-pair mode: {n} lines too many; " "use --within-papers"
         )
+
+    # per-unit view for the per-prompt chart (raw impact_score per
+    # paper/prompt; the R script joins citations from `per_paper`)
+    unit_rows = [
+        {
+            "id": r["id"],
+            "paper": r["paper"],
+            "prompt_id": r.get("prompt_id"),
+            "impact_score": r.get("impact_score"),
+        }
+        for r in records
+    ]
 
     # paper-level citation count (first non-null value for the paper)
     citations_by_paper: dict[str, int | None] = {}
@@ -158,9 +247,51 @@ def build_report(
 
     report["pairs"] = sorted(pair_rows, key=lambda r: -r["cosine"])
 
+    # within- vs between-paper variance of the cosine: the same split the
+    # pair rows already carry in `same_paper`. Same-paper pairs (different
+    # prompts of one paper) are the within-paper control; cross-paper pairs
+    # are the between-paper comparison. Missing on whichever side is empty
+    # (no same-paper pairs in a one-prompt-per-paper run, or none of them
+    # at all in --within-papers mode).
+    within = [r["cosine"] for r in pair_rows if r["same_paper"]]
+    between = [r["cosine"] for r in pair_rows if not r["same_paper"]]
+    split = {}
+    if within:
+        split["within_paper"] = _statistics(within)
+    if between:
+        split["between_paper"] = _statistics(between)
+    if within and between:
+        b_mean = float(np.mean(between))
+        if b_mean != 0.0:
+            split["mean_within_vs_between"] = round(
+                float(np.mean(within) / b_mean), 6
+            )
+    report["cosine_split"] = split
+
+    avg_impact = avg_impact_by_paper(records)
+
+    # paper-level view: impact averaged over prompts, each paper vs every
+    # other — the "smoother" series for plotting against overlap
+    report["paper_pairs"] = sorted(
+        build_paper_pairs(
+            matrix,
+            idx_by_paper,
+            doi_by_paper=doi_by_paper,
+            citations_by_paper=citations_by_paper,
+            avg_impact=avg_impact,
+        ),
+        key=lambda r: -(r["mean_cosine"] or 0),
+    )
+
     per_paper = {}
     for paper, indices in sorted(idx_by_paper.items()):
-        stats = {"units": len(indices)}
+        stats = {
+            "units": len(indices),
+            # same averages as paper_pairs: mean impact_score over the
+            # prompts, and the paper-level citation count
+            "avg_llm_impact": avg_impact.get(paper),
+            "citations": citations_by_paper.get(paper),
+        }
         if len(indices) >= 2:
             sub = matrix[np.asarray(indices)]
             d = sub @ sub.T
@@ -174,6 +305,7 @@ def build_report(
             )
         per_paper[paper] = stats
     report["per_paper"] = per_paper
+    report["units"] = unit_rows
     return report
 
 

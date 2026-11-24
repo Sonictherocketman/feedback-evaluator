@@ -1,0 +1,24 @@
+Impact-provenance partial-correlation analysis
+reference date: 2026-11-22   papers: 59   (data: embeddings.jsonl)
+----------------------------------------------------------------
+zero-order   impact      vs log10(cit+1) :  +0.60  (n=58)
+zero-order   originality vs log10(cit+1) :  +0.44  (n=58)
+zero-order   overall     vs log10(cit+1) :  +0.40  (n=58)
+zero-order   length      vs log10(cit+1) :  +0.27  (n=58)
+zero-order   age_years   vs log10(cit+1) :  +0.28  (n=57)
+----------------------------------------------------------------
+PARTIAL correlation of impact vs log10(cit+1), controlling for:
+  none (zero-order)           +0.60
+  length (words)              +0.59
+  age (years since pub)       +0.59
+  originality+overall         +0.43
+  length + age                +0.58
+  length+age+orig+overall     +0.49
+----------------------------------------------------------------
+PERMUTATION p-value, full-controlled partial corr:
+  impact~log10cit | length,age,orig,overall : partial r=+0.49  p=0.001
+
+READ: if the full-controlled partial corr is still clearly > 0, the
+impact score carries information about citations beyond length,
+recency and the other LLM scores (genuine importance proxy). If it
+collapses toward 0, its citations link was an artifact of those.

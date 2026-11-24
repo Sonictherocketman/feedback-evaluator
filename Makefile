@@ -26,7 +26,10 @@ N_PAPERS   ?= 200
 
 .PHONY: help install format format-check test coverage get-archive filter-by-doi \
 	subset enrich-via-s2 download-pdfs extract-text prepare \
-	eval embed compare run plot-raw-citations plots scan checks clean
+	eval embed compare run plot-raw-citations plot-x-impact \
+	plot-x-human-impact plot-human-vs-llm-impact-by-paper \
+	plot-human-vs-llm-impact-per-prompt plot-paper-impact \
+	plot-llm-metrics plots scan checks clean
 
 help:
 	@echo "Setup"
@@ -49,6 +52,12 @@ help:
 	@echo ""
 	@echo "Plots (R)"
 	@echo "  make plot-raw-citations   citations vs age -> plots/"
+	@echo "  make plot-x-impact        x-LLM-impact vs overlap (from the compare report)"
+	@echo "  make plot-x-human-impact  x-human-impact (citation diff) vs overlap"
+	@echo "  make plot-human-vs-llm-impact-by-paper  human vs LLM impact (per-paper avg)"
+	@echo "  make plot-human-vs-llm-impact-per-prompt  human vs LLM impact (per prompt)"
+	@echo "  make plot-paper-impact    group paper centroids, compare impact by group"
+	@echo "  make plot-llm-metrics     each LLM metric vs human impact (per paper)"
 	@echo "  make plots                all plot targets"
 	@echo ""
 	@echo "Developer checks"
@@ -115,7 +124,7 @@ extract-text:
 	cd $(ROOT)/$(PKG) && $(PY) -m feedback_evaluator extract $(EXTRACT_ARGS)
 	@echo "extracted the text from the pdfs to data/text/"
 
-prepare: get-archive filter-by-doi subset enrich-via-s2 download-pdfs extract-text
+prep: get-archive filter-by-doi subset enrich-via-s2 download-pdfs extract-text
 	@echo "==> done"
 
 # Running the analysis
@@ -139,7 +148,54 @@ plot-raw-citations:
 		$(DATA)/catalog/arxiv-w-s2.$(N_PAPERS).jsonl \
 		$(PLOTS)/citations_vs_age.png
 
-plots: plot-raw-citations
+plot-x-impact:
+	@for f in $(DATA)/results/overlap_report.json $(DATA)/embeddings/embeddings.jsonl; do \
+		[ -f $$f ] || { echo "missing $$f - run the pipeline up to compare first"; exit 1; }; done
+	Rscript $(ROOT)/scripts/plot-x-impact-vs-overlap.r \
+		$(DATA)/results/overlap_report.json \
+		$(PLOTS)/x_impact_vs_overlap.png \
+		$(DATA)/embeddings/embeddings.jsonl
+
+plot-x-human-impact:
+	@for f in $(DATA)/results/overlap_report.json $(DATA)/embeddings/embeddings.jsonl; do \
+		[ -f $$f ] || { echo "missing $$f - run the pipeline up to compare first"; exit 1; }; done
+	Rscript $(ROOT)/scripts/plot-x-human-impact-vs-overlap.r \
+		$(DATA)/results/overlap_report.json \
+		$(PLOTS)/x_human_impact_vs_overlap.png \
+		$(DATA)/embeddings/embeddings.jsonl
+
+plot-human-vs-llm-impact-by-paper:
+	@[ -f $(DATA)/results/overlap_report.json ] || { \
+		echo "missing $(DATA)/results/overlap_report.json - run make compare first"; exit 1; }
+	Rscript $(ROOT)/scripts/plot-human-vs-llm-impact-by-paper.r \
+		$(DATA)/results/overlap_report.json \
+		$(PLOTS)/human_vs_llm_impact_by_paper.png
+
+plot-human-vs-llm-impact-per-prompt:
+	@[ -f $(DATA)/results/overlap_report.json ] || { \
+		echo "missing $(DATA)/results/overlap_report.json - run make compare first"; exit 1; }
+	Rscript $(ROOT)/scripts/plot-human-vs-llm-impact-per-prompt.r \
+		$(DATA)/results/overlap_report.json \
+		$(PLOTS)/human_vs_llm_impact_per_prompt.png
+
+plot-paper-impact:
+	@[ -f $(DATA)/embeddings/embeddings.jsonl ] || { \
+		echo "missing $(DATA)/embeddings/embeddings.jsonl - run make embed first"; exit 1; }
+	Rscript $(ROOT)/scripts/paper-centroids-impact.r \
+		$(DATA)/embeddings/embeddings.jsonl \
+		$(PLOTS)/paper_impact_clusters.png \
+		$(PLOTS)/paper_impact_clusters.csv
+
+plot-llm-metrics:
+	@[ -f $(DATA)/embeddings/embeddings.jsonl ] || { \
+		echo "missing $(DATA)/embeddings/embeddings.jsonl - run make embed first"; exit 1; }
+	Rscript $(ROOT)/scripts/plot-llm-metrics-vs-human-impact.r \
+		$(DATA)/embeddings/embeddings.jsonl \
+		$(PLOTS)/llm_metrics_vs_human_impact.png
+
+plots: plot-raw-citations plot-x-impact plot-x-human-impact \
+	plot-human-vs-llm-impact-by-paper plot-human-vs-llm-impact-per-prompt \
+	plot-paper-impact plot-llm-metrics
 
 # Paper
 

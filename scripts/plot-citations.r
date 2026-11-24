@@ -61,3 +61,4 @@ p <- ggplot(df, aes(age_months, citations + 1)) +
 
 ggsave(out_png, p, width = 8, height = 5, dpi = 150, bg = "white")
 print(p)
+unlink("Rplots.pdf")   # print() opens a pdf device in the CWD; drop it

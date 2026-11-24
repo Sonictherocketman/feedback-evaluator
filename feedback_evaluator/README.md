@@ -103,6 +103,36 @@ feedback_evaluator compare
   stage (R) filter either population without re-deriving it. Output:
   `results/overlap_report.json` (no `near_duplicate_pairs`, `source`, or
   `n_lines` — the full `pairs` list is the data).
+  - **`paper_pairs`** — a second, *paper-level* view: one row per pair of
+    distinct papers, with the per-prompt data collapsed. Each row carries
+    `avg_llm_impact_a`/`_b` (each paper's mean `impact_score` over its
+    prompts), `avg_x_llm_impact` (their |diff|),
+    `human_impact_a`/`_b` (each paper's citation count — a paper-level
+    constant, so no averaging), `x_human_impact` (their |diff|),
+    `mean_cosine` (mean overlap over
+    every unit×unit combo between the two papers), and
+    `total_human_impact`. Because the LLM impact is averaged over prompts,
+    `avg_x_llm_impact` is continuous, which is what the `plot-x-impact`
+    series uses for a smooth trend line.
+  - **`per_paper`** — one entry per paper: unit count, coherence stats,
+    plus `avg_llm_impact` (mean `impact_score` over the prompts — the
+    same average `paper_pairs` uses) and `citations` (the paper-level
+    citation count), which is what
+    `plot-human-vs-llm-impact-by-paper` reads.
+  - **`units`** — one row per unit (`id`, `paper`, `prompt_id`, the raw
+    per-prompt `impact_score`); `plot-human-vs-llm-impact-per-prompt`
+    joins this against `per_paper` citations for an unaveraged
+    per-prompt view.
+  - **`cosine_split`** — the cosine distribution split on the
+    `same_paper` flag: `within_paper` (same paper, different prompts)
+    and `between_paper` (cross-paper) statistics (the same
+    mean/median/p05/p95/min/max shape as `cosine_stats`), plus
+    `mean_within_vs_between` (within mean / between mean) when both
+    sides are non-empty *and* the between mean is nonzero. A within
+    value clearly above the between value is the signal that a paper
+    looks more like itself than like other papers; the split is
+    absent on whichever side has no pairs (e.g. `--within-papers` mode
+    has no `between_paper`).
 
 ## Layout
 
@@ -151,6 +181,11 @@ make run                  extract-text -> eval -> embed -> compare (all)
 
 # Plots (R)
 make plot-raw-citations   citations vs age -> plots/
+make plot-x-impact        x-LLM-impact vs overlap (paper-level)
+make plot-x-human-impact  x-human-impact (citation diff) vs overlap
+make plot-human-vs-llm-impact-by-paper  human vs LLM impact (per-paper avg)
+make plot-human-vs-llm-impact-per-prompt  human vs LLM impact (per prompt)
+make plot-paper-impact    group paper centroids, compare impact by group
 make plots                all plot targets
 
 # Developer checks
